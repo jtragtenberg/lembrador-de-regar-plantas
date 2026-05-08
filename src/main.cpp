@@ -1,6 +1,13 @@
 #include <M5Stack.h>
 #include <Preferences.h>
 
+#ifdef M5FIRE
+#include <Adafruit_NeoPixel.h>
+#define LED_PIN   15
+#define LED_COUNT 10
+Adafruit_NeoPixel strip(LED_COUNT, LED_PIN, NEO_GRB + NEO_KHZ800);
+#endif
+
 #define C565(r, g, b) \
     ((uint16_t)((((r)&0xF8u) << 8) | (((g)&0xFCu) << 3) | ((b) >> 3)))
 
@@ -147,12 +154,24 @@ void waterPlant(int idx) {
     elapsedSec[idx] = 0;
     prefs.putUInt(PREF_KEY[idx], 0);
     drawSection(idx);
+#ifdef M5FIRE
+    bool anyAlarm = false;
+    for (int i = 0; i < NUM_PLANTS; i++)
+        if (elapsedSec[i] >= INTERVAL_SEC[i]) { anyAlarm = true; break; }
+    if (!anyAlarm) { strip.clear(); strip.show(); }
+#endif
 }
 
 // ── Setup ─────────────────────────────────────────────────────────────────────
 void setup() {
     M5.begin();
     M5.Power.begin();
+#ifdef M5FIRE
+    strip.begin();
+    strip.setBrightness(80);
+    strip.clear();
+    strip.show();
+#endif
     M5.Lcd.fillScreen(C_BG);
     M5.Lcd.setTextFont(1);
 
@@ -191,9 +210,14 @@ void loop() {
     if (now - lastBlink >= 500u) {
         lastBlink  = now;
         blinkState = !blinkState;
+        bool anyAlarm = false;
         for (int i = 0; i < NUM_PLANTS; i++) {
-            if (elapsedSec[i] >= INTERVAL_SEC[i]) { needRedraw = true; break; }
+            if (elapsedSec[i] >= INTERVAL_SEC[i]) { anyAlarm = true; needRedraw = true; break; }
         }
+#ifdef M5FIRE
+        strip.fill(anyAlarm && blinkState ? strip.Color(255, 0, 0) : 0);
+        strip.show();
+#endif
     }
 
     if (needRedraw) redrawAll();
