@@ -1,8 +1,6 @@
 #include <M5Stack.h>
 #include <Preferences.h>
 #include <WiFi.h>
-#include <esp_sleep.h>
-#include <driver/gpio.h>
 
 #ifdef M5FIRE
 #include <Adafruit_NeoPixel.h>
@@ -203,11 +201,6 @@ void setup() {
 
     redrawAll();
 
-    gpio_wakeup_enable((gpio_num_t)39, GPIO_INTR_LOW_LEVEL); // BtnA
-    gpio_wakeup_enable((gpio_num_t)38, GPIO_INTR_LOW_LEVEL); // BtnB
-    gpio_wakeup_enable((gpio_num_t)37, GPIO_INTR_LOW_LEVEL); // BtnC
-    esp_sleep_enable_gpio_wakeup();
-
     uint32_t now = millis();
     lastSecTick  = now;
     lastBlink    = now;
@@ -255,11 +248,9 @@ void loop() {
     if (anyAlarm) {
         delay(100);
     } else {
-        uint32_t msToNextSec  = 1000u  - (now - lastSecTick);
+        uint32_t msToNextSec  = 1000u    - (now - lastSecTick);
         uint32_t msToNextHour = 3600000u - (now - lastHourDraw);
-        uint32_t sleepMs      = min(msToNextSec, msToNextHour);
-        esp_sleep_enable_timer_wakeup((uint64_t)sleepMs * 1000ULL);
-        esp_light_sleep_start();
+        delay(min(msToNextSec, msToNextHour));
     }
 
     if (now - lastSave >= 60000u) {
