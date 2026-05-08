@@ -1,5 +1,8 @@
 #include <M5Stack.h>
 #include <Preferences.h>
+#include <WiFi.h>
+#include <esp_sleep.h>
+#include <driver/gpio.h>
 
 #ifdef M5FIRE
 #include <Adafruit_NeoPixel.h>
@@ -43,10 +46,11 @@ static const uint16_t C_VSWATER = C565( 50, 150, 255);
 Preferences  prefs;
 TFT_eSprite  spr(&M5.Lcd);   // sprite único reutilizado para cada seção
 uint32_t elapsedSec[NUM_PLANTS];
-bool     blinkState  = false;
-uint32_t lastBlink   = 0;
-uint32_t lastSecTick = 0;
-uint32_t lastSave    = 0;
+bool     blinkState   = false;
+uint32_t lastBlink    = 0;
+uint32_t lastSecTick  = 0;
+uint32_t lastSave     = 0;
+uint32_t lastHourDraw = 0;
 
 inline int sectionX(int i) { return i * (SEC_W + DIV_W); }
 
@@ -145,8 +149,20 @@ void drawSection(int idx) {
     }
 }
 
+void drawBattery() {
+    int pct = M5.Power.getBatteryLevel();
+    uint16_t col = pct > 20 ? C_WHITE : C_ALARM_A;
+    M5.Lcd.setTextFont(1);
+    M5.Lcd.setTextSize(1);
+    M5.Lcd.setTextColor(col, C_BG);
+    char buf[6];
+    snprintf(buf, sizeof(buf), "%3d%%", pct);
+    M5.Lcd.drawString(buf, 295, 4);
+}
+
 void redrawAll() {
     for (int i = 0; i < NUM_PLANTS; i++) drawSection(i);
+    drawBattery();
 }
 
 // ── Watering action ───────────────────────────────────────────────────────────
@@ -164,6 +180,9 @@ void waterPlant(int idx) {
 
 // ── Setup ─────────────────────────────────────────────────────────────────────
 void setup() {
+    setCpuFrequencyMhz(80);
+    btStop();
+    WiFi.mode(WIFI_OFF);
     M5.begin();
     M5.Power.begin();
 #ifdef M5FIRE
@@ -184,10 +203,16 @@ void setup() {
 
     redrawAll();
 
+    gpio_wakeup_enable((gpio_num_t)39, GPIO_INTR_LOW_LEVEL); // BtnA
+    gpio_wakeup_enable((gpio_num_t)38, GPIO_INTR_LOW_LEVEL); // BtnB
+    gpio_wakeup_enable((gpio_num_t)37, GPIO_INTR_LOW_LEVEL); // BtnC
+    esp_sleep_enable_gpio_wakeup();
+
     uint32_t now = millis();
     lastSecTick  = now;
     lastBlink    = now;
     lastSave     = now;
+    lastHourDraw = now;
 }
 
 // ── Loop ──────────────────────────────────────────────────────────────────────
@@ -204,23 +229,38 @@ void loop() {
     if (now - lastSecTick >= 1000u) {
         lastSecTick += 1000u;
         for (int i = 0; i < NUM_PLANTS; i++) elapsedSec[i]++;
-        needRedraw = true;
     }
 
-    if (now - lastBlink >= 500u) {
+    bool anyAlarm = false;
+    for (int i = 0; i < NUM_PLANTS; i++)
+        if (elapsedSec[i] >= INTERVAL_SEC[i]) { anyAlarm = true; break; }
+
+    if (anyAlarm && now - lastBlink >= 500u) {
         lastBlink  = now;
         blinkState = !blinkState;
-        bool anyAlarm = false;
-        for (int i = 0; i < NUM_PLANTS; i++) {
-            if (elapsedSec[i] >= INTERVAL_SEC[i]) { anyAlarm = true; needRedraw = true; break; }
-        }
+        needRedraw = true;
 #ifdef M5FIRE
-        strip.fill(anyAlarm && blinkState ? strip.Color(255, 0, 0) : 0);
+        strip.fill(blinkState ? strip.Color(255, 0, 0) : 0);
         strip.show();
 #endif
     }
 
+    if (!anyAlarm && now - lastHourDraw >= 3600000u) {
+        lastHourDraw = now;
+        needRedraw   = true;
+    }
+
     if (needRedraw) redrawAll();
+
+    if (anyAlarm) {
+        delay(100);
+    } else {
+        uint32_t msToNextSec  = 1000u  - (now - lastSecTick);
+        uint32_t msToNextHour = 3600000u - (now - lastHourDraw);
+        uint32_t sleepMs      = min(msToNextSec, msToNextHour);
+        esp_sleep_enable_timer_wakeup((uint64_t)sleepMs * 1000ULL);
+        esp_light_sleep_start();
+    }
 
     if (now - lastSave >= 60000u) {
         lastSave = now;
